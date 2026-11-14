@@ -1,6 +1,45 @@
 # BilibiliPotPlayer
 
-适用于 PotPlayer 的 Bilibili 插件。如果配合[油猴脚本](https://greasyfork.org/zh-CN/scripts/461800-bilibilipotplayer)，可以直接在网页打开 PotPlayer 进行播放
+适用于 PotPlayer 的 Bilibili 插件。如果配合[油猴脚本](https://greasyfork.org/zh-CN/scripts/461800-bilibilipotplayer)，可以直接在网页打开 PotPlayer 进行播放
+
+---
+
+## 本分支：PotPlayer 26.x 兼容性修复版
+
+> 原插件最后更新于 **2025-05-22**，而 PotPlayer **26.x**（2026 年起）重构了 AngelScript 扩展系统。
+> 原版在新版播放器上会出现：黑屏转圈、有画面没声音、「服务器已关闭或地址错误」、只有第一个分P能播、画质异常模糊。
+>
+> 本分支已针对 PotPlayer **26.10.21** 完成修复并实测通过。
+
+**主要改动**
+
+| 问题 | 修复方式 |
+|---|---|
+| 配置文件读不进来（`ServerLogin` 回调已被新版移除） | 改为 `EnsureConfig()` 懒加载，在解析入口直接读取 |
+| B站 CDN 返回 403（PotPlayer 不发送 Referer） | 新增本地转发服务 `proxy/bili_proxy.py`，绕开播放器 header 机制 |
+| 有画面没声音（DASH 音视频分离、音轨配对失败） | 新增 `forceMuxed` 开关，默认请求音视频合一的 mp4 |
+| 第 2 集起播不了（失败请求把空 URL 混入画质列表） | 画质列表只保留最高档，不再插入空项 |
+| 画质被误选成 360P | 同上，只提供当前最高画质 |
+| 弹幕加载拖累播放 | 原弹幕服务器 `subtitle.chen310.repl.co` 域名已失效，默认关闭 |
+
+**快速开始**
+
+```text
+1. 复制插件文件到 PotPlayer 的 Extension\Media\ 对应目录（见下方「安装插件」）
+2. 编辑 Bilibili_Config.json，把 cookie 填成你自己的
+3. 双击 proxy\start_proxy.bat 启动转发服务    <- 关键，不启动则无法播放
+4. 重启 PotPlayer，把 B站链接拖进去
+```
+
+> 转发服务必须保持运行。建议把 `start_proxy.bat` 的快捷方式放进 `shell:startup` 实现开机自启。
+>
+> 验证服务是否正常：浏览器打开 <http://127.0.0.1:18999/ping>，返回 `pong` 即可。
+
+**完整文档**
+
+原理解析、逐项改动说明、配置项解释、故障排查表、已知限制 → **[docs/FIX-PotPlayer-26.md](docs/FIX-PotPlayer-26.md)**
+
+---
 
 ## 安装插件
 

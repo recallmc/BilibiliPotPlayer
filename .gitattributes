@@ -1,0 +1,16 @@
+.gitattributes text eol=lf
+
+# AngelScript 插件脚本必须保持 LF，否则部分 PotPlayer 版本加载异常
+*.as text eol=lf
+
+# Python 脚本
+*.py text eol=lf
+
+# Windows 批处理
+*.bat text eol=crlf
+
+# JSON 配置
+*.json text eol=lf
+
+# 文档
+*.md text eol=lf

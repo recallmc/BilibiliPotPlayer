@@ -1,11 +1,16 @@
 {
-	// 填写账号 Cookie
+	// 填写账号 Cookie（必填，否则只能拿到低画质）
+	// 获取方法见 https://github.com/chen310/BilibiliPotPlayer/issues/62
 	"cookie": "",
+
 	"maxliveroom": 200,
+
 	"danmaku": {
 		// 控制是否接收弹幕。按 Alt+H 可显示/隐藏弹幕
-		"enable": true,
-		"server": "https://subtitle.chen310.repl.co",
+		// 注意：默认弹幕服务器 subtitle.chen310.repl.co 的域名已失效（DNS 无法解析），
+		//       未更换为可用服务器前请保持 enable = false，否则字幕加载失败会拖累播放
+		"enable": false,
+		"server": "",
 		// 字体
 		"font": "微软雅黑",
 		// 字号
@@ -17,7 +22,14 @@
 		// 弹幕显示时间
 		"stayTime": 15.0
 	},
+
 	// 播放单个视频时是否显示推荐的视频
 	"showRecommendedVideos": true,
+
+	// true  = 请求音视频合一的 mp4（fnval=1）。声音必定正常，画质上限 1080P
+	// false = 请求 DASH 分离流（fnval=4048）。画质更高，但 PotPlayer 26.x 下音轨可能配对失败导致无声
+	"forceMuxed": true,
+
+	// 开启后播放时会弹出 AngelScript 控制台输出解析日志，排查问题时使用
 	"debug": false
 }

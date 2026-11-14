@@ -24,10 +24,19 @@
 
 Config ConfigData;
 
+void SetBiliHeaders(const string &in host, const string &in ua) {
+	HostSetUrlHeaderHTTP(host, "Referer: https://www.bilibili.com\r\n");
+	HostSetUrlRefererHTTP(host, "https://www.bilibili.com");
+}
+
 void OnInitialize() {
-	HostSetUrlHeaderHTTP("bilivideo.com", "Referer: https://www.bilibili.com\r\n");
-	HostSetUrlHeaderHTTP("bilivideo.cn", "Referer: https://www.bilibili.com\r\n");
-	HostSetUrlHeaderHTTP("bilibili.com", "Referer: https://www.bilibili.com\r\n");
+	string ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+	SetBiliHeaders("bilivideo.com", ua);
+	SetBiliHeaders("bilivideo.cn", ua);
+	SetBiliHeaders("bilibili.com", ua);
+	SetBiliHeaders("akamaized.net", ua);
+	SetBiliHeaders("szbdyd.com", ua);
+	SetBiliHeaders("hdslb.com", ua);
 }
 
 string host = "https://api.bilibili.com";
@@ -127,6 +136,7 @@ class Config {
 	float danmakuStayTime = 15.0;
 	bool showRecommendedVideos = true;
 	bool debug = false;
+	bool forceMuxed = true;
 
 	string danmakuUrl;
 	string subtitleUrl;
@@ -183,12 +193,73 @@ Config ReadConfigFile(string file) {
 		if (root["debug"].isBool()) {
 			config.debug = root["debug"].asBool();
 		}
+		if (root["forceMuxed"].isBool()) {
+			config.forceMuxed = root["forceMuxed"].asBool();
+		}
 		if (!config.danmakuServer.empty()) {
 			config.danmakuUrl = config.danmakuServer +  "/subtitle?font=" + HostUrlEncode(config.danmakuFont) + "&font_size=" + config.danmakuFontSize + "&alpha=" + config.danmakuOpacity + "&display_area=" + config.danmakuDisplayArea + "&duration_marquee=" + config.danmakuStayTime + "&duration_still=" + config.danmakuStayTime + "&cid=";
 			config.subtitleUrl = config.danmakuServer + "/subtitle?url=";
 		}
 	}
 	return config;
+}
+
+// PotPlayer 26.x 已废弃 ServerLogin 回调，改为在解析入口懒加载配置文件
+void EnsureConfig() {
+	if (!ConfigData.fullConfig.empty()) {
+		return;
+	}
+	string cfg = "D:\\Program Files\\DAUM\\PotPlayer\\Extension\\Media\\PlayParse\\Bilibili_Config.json";
+	if (isFileExists(cfg)) {
+		ConfigData = ReadConfigFile(cfg);
+		if (ConfigData.debug) {
+			HostOpenConsole();
+			log("config", "loaded OK");
+		}
+	} else {
+		log("config", "FILE NOT FOUND");
+	}
+}
+
+// forceMuxed = true 时请求音视频合一的 durl(fnval=1)，避免 DASH 分离流在部分播放器上没声音
+string getFnval() {
+	if (ConfigData.forceMuxed) {
+		return "1";
+	}
+	return "4048";
+}
+
+// PotPlayer 不会把主域名(bilivideo.com)的 Referer 设置应用到子域名
+// (如 upos-sz-mirrorcosov.bilivideo.com)，导致 CDN 返回 403。这里按实际 URL 精确设置。
+void ApplyCdnHeader(const string &in u) {
+	if (u.empty()) {
+		return;
+	}
+	array<string> parts = u.split("/");
+	if (parts.length() < 3) {
+		return;
+	}
+	string h = parts[2];
+	if (!h.empty()) {
+		HostSetUrlHeaderHTTP(h, "Referer: https://www.bilibili.com\r\n");
+		HostSetUrlRefererHTTP(h, "https://www.bilibili.com");
+		log("cdn-header", h);
+	}
+}
+
+// 通过本地转发服务取流：绕开 PotPlayer 不发送 Referer 导致 CDN 403 的问题
+// 服务未启动时自动回退到原始地址
+string WrapProxy(const string &in u) {
+	if (u.empty()) {
+		return u;
+	}
+	string reg = HostUrlGetString("http://127.0.0.1:18999/reg?u=" + HostUrlEncode(u), "", "", "", true);
+	if (reg.empty()) {
+		log("proxy", "service down -> direct url");
+		return u;
+	}
+	log("proxy-id", reg);
+	return "http://127.0.0.1:18999/p/" + reg;
 }
 
 uint status = 0;
@@ -236,7 +307,17 @@ string post(string url, string data="") {
 		Headers += "Cookie: " + ConfigData.cookie + "\r\n";
 	}
 	log("request", url);
-	return HostUrlGetStringWithAPI(url, UserAgent, Headers, data, true);
+	string res = HostUrlGetStringWithAPI(url, UserAgent, Headers, data, true);
+	if (res.empty()) {
+		log("retry", "WithAPI returned empty -> fallback to HostUrlGetString");
+		res = HostUrlGetString(url, UserAgent, Headers, data, true);
+	}
+	if (res.empty()) {
+		log("result", "EMPTY RESPONSE");
+	} else {
+		log("result", "OK");
+	}
+	return res;
 }
 
 string apiPost(string api, string data="") {
@@ -394,6 +475,7 @@ string Video(string bvid, const string &in path, dictionary &MetaData, array<dic
 	array<dictionary> subtitle;
 	res = apiPost("/x/web-interface/view?bvid=" + bvid);
 	if (res.empty()) {
+		MetaData["errorMessage"] = "Bilibili: API request failed (network/cookie)";
 		return url;
 	}
 	if (reader.parse(res, root) && root.isObject()) {
@@ -426,7 +508,8 @@ string Video(string bvid, const string &in path, dictionary &MetaData, array<dic
 				ispgc = true;
 			}
 			MetaData["webUrl"] = makeWebUrl(webUrl);
-			if (ConfigData.danmakuEnable) {
+			MetaData["vid"] = bvid + "_p" + p;
+			if (ConfigData.danmakuEnable && !ConfigData.danmakuUrl.empty()) {
 				dictionary dic;
 				dic["name"] = "【弹幕】" + title;
 				dic["url"] = ConfigData.danmakuUrl + cid;
@@ -439,12 +522,13 @@ string Video(string bvid, const string &in path, dictionary &MetaData, array<dic
 
 	res = apiPost("/x/player/wbi/v2?bvid=" + bvid + "&cid=" + cid);
 	if (res.empty()) {
+		MetaData["errorMessage"] = "Bilibili: API request failed (network/cookie)";
 		return url;
 	}
 	if (reader.parse(res, root) && root.isObject()) {
 		if (root["code"].asInt() == 0) {
 			JsonValue data = root["data"];
-			if (ConfigData.danmakuEnable) {
+			if (ConfigData.danmakuEnable && !ConfigData.subtitleUrl.empty()) {
 				JsonValue subs;
 				subs = root["data"]["subtitle"]["subtitles"];
 				if (subs.isArray()) {
@@ -484,11 +568,12 @@ string Video(string bvid, const string &in path, dictionary &MetaData, array<dic
 	}
 	status = 3;
 	if (ispgc) {
-		res = apiPost("/pgc/player/web/playurl?avid=" + aid + "&cid=" + cid + "&qn=" + qn + "&fnval=4048&fourk=1");
+		res = apiPost("/pgc/player/web/playurl?avid=" + aid + "&cid=" + cid + "&qn=" + qn + "&fnval=" + getFnval() + "&fourk=1");
 	} else {
-		res = apiPost("/x/player/playurl?avid=" + aid + "&cid=" + cid + "&qn=" + qn + "&fnval=4048&fourk=1");
+		res = apiPost("/x/player/playurl?avid=" + aid + "&cid=" + cid + "&qn=" + qn + "&fnval=" + getFnval() + "&fourk=1");
 	}
 	if (res.empty()) {
+		MetaData["errorMessage"] = "Bilibili: API request failed (network/cookie)";
 		return url;
 	}
 	if (reader.parse(res, root) && root.isObject()) {
@@ -588,17 +673,20 @@ string Video(string bvid, const string &in path, dictionary &MetaData, array<dic
 				if (@QualityList !is null) {
 					for (uint i = 0; i < qualities.size(); i++) {
 						int quality = qualities[i].asInt();
+						if (quality != qn) {
+							continue;
+						}
 						dictionary qualityitem;
-						int quality_codecid;
+						int quality_codecid = codecid;
 						if (quality == qn) {
-							qualityitem["url"] = url;
+							qualityitem["url"] = WrapProxy(url);
 							quality_codecid = codecid;
 						} else {
 							string quality_res;
 							if (ispgc) {
-								quality_res = apiPost("/pgc/player/web/playurl?avid=" + aid + "&cid=" + cid + "&qn=" + quality + "&fnval=4048&fourk=1");
+								quality_res = apiPost("/pgc/player/web/playurl?avid=" + aid + "&cid=" + cid + "&qn=" + quality + "&fnval=" + getFnval() + "&fourk=1");
 							} else {
-								quality_res = apiPost("/x/player/playurl?avid=" + aid + "&cid=" + cid + "&qn=" + quality + "&fnval=4048&fourk=1");
+								quality_res = apiPost("/x/player/playurl?avid=" + aid + "&cid=" + cid + "&qn=" + quality + "&fnval=" + getFnval() + "&fourk=1");
 							}
 							JsonValue temp;
 							if (reader.parse(quality_res, temp) && temp.isObject()) {
@@ -627,9 +715,9 @@ string Video(string bvid, const string &in path, dictionary &MetaData, array<dic
 					if (QualityList.length() == 1) {
 						dictionary qualityitem2;
 						if (data["durl"][0]["backup_url"].isArray() && data["durl"][0]["backup_url"].size() > 0) {
-							qualityitem2["url"] = data["durl"][0]["backup_url"][0].asString();
+							qualityitem2["url"] = WrapProxy(data["durl"][0]["backup_url"][0].asString());
 						} else {
-							qualityitem2["url"] = url;
+							qualityitem2["url"] = WrapProxy(url);
 						}
 						qualityitem2["quality"] = "- " + getVideoquality(qn) + getCodec(codecid) + " 备用";
 						qualityitem2["qualityDetail"] = qualityitem2["quality"];
@@ -650,6 +738,9 @@ string Video(string bvid, const string &in path, dictionary &MetaData, array<dic
 	log("cid", cid);
 	log("url", url);
 
+	if (url.empty()) {
+		MetaData["errorMessage"] = "Bilibili: no playable url resolved";
+	}
 	return url;
 }
 
@@ -1814,6 +1905,7 @@ bool PlaylistCheck(const string &in path) {
 
 array<dictionary> PlaylistParse(const string &in path) {
 	log("Playlist path", path);
+	EnsureConfig();
 	status = 1;
 	array<dictionary> result;
 
@@ -1905,21 +1997,23 @@ array<dictionary> PlaylistParse(const string &in path) {
 
 string PlayitemParse(const string &in path, dictionary &MetaData, array<dictionary> &QualityList) {
 	log("Playitem path", path);
+	EnsureConfig();
 	status = 2;
+	string finalUrl = path;
 	if (path.find("/video/BV") >= 0) {
 		string bvid = parseBVId(path);
-		return Video(bvid, path, MetaData, QualityList);
-	}
-	if (path.find("live.bilibili.com") >= 0) {
+		finalUrl = Video(bvid, path, MetaData, QualityList);
+	} else if (path.find("live.bilibili.com") >= 0) {
 		string id = HostRegExpParse(path, "live.bilibili.com/([0-9]+)");
 		if (!id.empty()) {
-			return Live(id, path, MetaData, QualityList);
+			finalUrl = Live(id, path, MetaData, QualityList);
 		}
-	}
-	if (path.find("www.bilibili.com/audio/au") >= 0) {
-		return Audio(path, MetaData, QualityList);
+	} else if (path.find("www.bilibili.com/audio/au") >= 0) {
+		finalUrl = Audio(path, MetaData, QualityList);
 	}
 
-	return path;
+	ApplyCdnHeader(finalUrl);
+	finalUrl = WrapProxy(finalUrl);
+	return finalUrl;
 }
 
