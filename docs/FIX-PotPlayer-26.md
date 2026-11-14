@@ -76,7 +76,7 @@ PotPlayer 一旦选中这个空项，就是「文件无法播放」。
 
 ## 三、修复清单
 
-修改后的 `MediaPlayParse - Bilibili.as` 相对原版 **+116 行 / -22 行**，共 9 处改动：
+修改后的 `MediaPlayParse - Bilibili.as` 相对原版 **+157 行 / -28 行**（1925 → 2054 行），共 11 处改动：
 
 | # | 改动 | 作用 |
 |---|---|---|
@@ -89,6 +89,8 @@ PotPlayer 一旦选中这个空项，就是「文件无法播放」。
 | 7 | 4 处 `errorMessage` | 失败时明确告知原因，不再静默 |
 | 8 | `post()` 自动降级 | `HostUrlGetStringWithAPI` 返回空时自动改用 `HostUrlGetString` 重试 |
 | 9 | `ApplyCdnHeader()` + `WrapProxy()` | 精确到实际 CDN 子域名设置 Referer；并接入本地转发服务 |
+| 10 | `proxyRetry` 失败计数 | 服务不可用时最多重试 5 次即停止，避免每个 URL 都等连接超时拖慢解析 |
+| 11 | `OnInitialize` / `OnFinalize` 生命周期钩子 | 播放器启动时拉起转发服务、关闭时通知其退出，实现服务生命周期与播放器绑定 |
 
 ### 关于第 9 项（最终解法）
 
@@ -110,6 +112,52 @@ PotPlayer ──► http://127.0.0.1:18999/p/<id>
 
 `proxy/bili_proxy.py` 即该服务，仅依赖 Python 3 标准库，无需安装任何第三方包。
 服务未启动时，插件会自动回退到直连 CDN（即修复前的行为），不会导致更差的结果。
+
+### 关于第 11 项（生命周期绑定）
+
+转发服务是常驻进程，但不应长期占用后台。因此把它与 PotPlayer 的生命周期绑定：
+
+```angelscript
+// 启动时：探测 → 未运行则拉起
+void OnInitialize() {
+    ...
+    EnsureConfig();
+    EnsureProxyStarted();
+}
+
+// 关闭时：通知服务退出
+void OnFinalize() {
+    HostUrlGetString("http://127.0.0.1:18999/shutdown", "", "", "", true);
+}
+```
+
+`EnsureProxyStarted()` 先请求 `/ping`：
+
+- 已有实例在跑 → 直接复用，不重复启动
+- 没有实例 → 通过 `C:\Windows\System32\cmd.exe /c "<launch.bat 路径>"` 启动
+
+> 注意：`HostExecuteProgram` **必须给完整路径**。实测传 `wscript.exe` 这种裸文件名会静默失败，找不到程序。
+> 另外 `launch.bat` 里用 `start` 确保非阻塞，否则会卡住 `OnInitialize`。
+
+如果 PotPlayer 异常退出（`OnFinalize` 来不及执行），服务内的看门狗会在约 25 秒后自行退出：
+
+```python
+def _watchdog():
+    miss = 0
+    while not _shutdown_evt.is_set():
+        time.sleep(WATCH_INTERVAL)          # 5 秒
+        if time.time() - _started_at < WATCH_STARTUP_GRACE:
+            continue                        # 启动后 15 秒宽限
+        if _potplayer_alive():
+            miss = 0
+            continue
+        miss += 1
+        if miss >= WATCH_MISS_LIMIT:        # 连续 2 次未找到
+            os._exit(0)
+```
+
+> 进程检测用 `tasklist` 全量输出后做 bytes 匹配。中文系统下 `tasklist` 输出 GBK，
+> 若用 `text=True` 会触发 UTF-8 解码异常，因此必须按 bytes 处理。
 
 ---
 
@@ -155,22 +203,44 @@ D:\Program Files\DAUM\PotPlayer\Extension\Media\PlayParse\Bilibili_Config.json
 > 没关系——修复版插件已用 `EnsureConfig()` 自行读取配置文件，不依赖这个回调。
 > **每次修改配置文件后都需要重启 PotPlayer。**
 
-### 4. 启动转发服务
+### 4. 配置转发服务自动启动（推荐）
 
-双击 `proxy\start_proxy.bat`。
+编辑 `Bilibili_Config.json`，把 `proxyAutoStart` 填成 `launch.bat` 的**完整路径**：
 
-- 已有实例在运行时脚本会提示 `already running`，直接关闭即可。
-- 服务在后台运行（`pythonw.exe`），无窗口。
-- 验证：浏览器打开 <http://127.0.0.1:18999/ping>，看到 `pong` 即正常。
+```json
+"proxyAutoStart": "C:\\PotPlayer-Bili\\proxy\\launch.bat"
+```
 
-### 5. 设置开机自启（可选但推荐）
+> 路径中的反斜杠要写两次（JSON 转义规则）。
 
-把 `start_proxy.bat` 的快捷方式放入启动文件夹：
+填写后即形成完整的生命周期绑定：
 
-1. 按 `Win + R`，输入 `shell:startup`，回车
-2. 将 `start_proxy.bat` 的**快捷方式**拖进去
+| 时机 | 行为 |
+|---|---|
+| PotPlayer 启动 | 插件在 `OnInitialize` 中先探测 `/ping`，未运行则用 `cmd /c` 调 `launch.bat` 拉起（`pythonw` 无窗口） |
+| PotPlayer 正常关闭 | 插件在 `OnFinalize` 中请求 `/shutdown`，服务立即退出 |
+| PotPlayer 崩溃 | 服务内置看门狗每 5 秒检测一次进程，连续 2 次未找到即自行退出（约 25 秒内） |
 
-这样每次开机会自动启动转发服务，无需手动操作。
+服务启动后有 15 秒宽限期才启用看门狗，避免播放器初始化慢时被误杀。
+
+**因此不需要设置开机自启** —— 播放器不开，服务不占任何资源。
+
+> 如果 `pythonw.exe` 不在 PATH 中，请编辑 `launch.bat`，把 `set PYTHONW=pythonw` 改成完整路径：
+> ```bat
+> set PYTHONW=D:\python\pythonw.exe
+> ```
+
+### 5. 验证服务状态
+
+打开 PotPlayer 后，浏览器访问 <http://127.0.0.1:18999/ping>，返回 `pong` 即服务已就绪。
+
+如需脱离播放器单独调试服务：
+
+```bat
+python proxy\bili_proxy.py --no-watch
+```
+
+`--no-watch` 会禁用看门狗，服务不会因 PotPlayer 未运行而自动退出，需按 `Ctrl+C` 手动结束。
 
 ### 6. 开始播放
 
@@ -190,6 +260,7 @@ D:\Program Files\DAUM\PotPlayer\Extension\Media\PlayParse\Bilibili_Config.json
 | `danmaku.server` | `""` | 弹幕服务器地址，需自行部署或寻找可用实例 |
 | `showRecommendedVideos` | `true` | 播放单集时是否在列表中附加推荐视频 |
 | `debug` | `false` | 开启后播放时弹出 AngelScript 控制台，输出解析日志，排查问题用 |
+| `proxyAutoStart` | `""` | `launch.bat` 的完整路径。填写后服务随 PotPlayer 启停；留空则需手动启动服务 |
 
 ### 画质与声音的取舍
 

@@ -38,9 +38,12 @@ HEAD /p/<id>             同上，仅返回响应头
 或双击同目录的 start_proxy.bat（无窗口后台运行）
 """
 
+import os
 import sys
 import time
+import argparse
 import threading
+import subprocess
 import urllib.request
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -61,6 +64,18 @@ FWD_HEADERS = ("content-type", "content-length", "content-range",
 
 CHUNK = 262144          # 262KB，兼顾吞吐与内存
 IDLE_TTL = 3 * 3600     # 3 小时未使用的映射自动清理
+
+# ---- 生命周期跟随 ----
+# 服务由 PotPlayer 插件在 OnInitialize 时拉起，OnFinalize 时通过 /shutdown 关闭。
+# watchdog 作为兜底：万一 PotPlayer 崩溃没来得及通知，检测到进程消失后自行退出。
+POTPLAYER_EXES = ("PotPlayerMini64.exe", "PotPlayer64.exe",
+                  "PotPlayerMini.exe", "PotPlayer.exe")
+WATCH_INTERVAL = 5      # 每 5 秒检测一次
+WATCH_MISS_LIMIT = 2    # 连续 2 次检测不到才退出（约 10 秒，避免误杀）
+WATCH_STARTUP_GRACE = 15    # 启动后 15 秒内不检测，留出播放器初始化时间
+
+_started_at = time.time()
+_shutdown_evt = threading.Event()
 
 # ---------------------------------------------------------------- 状态
 _store = {}             # id(str) -> CDN url
@@ -203,6 +218,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/ping":
             self._send_text(200, "pong")
+        elif path == "/shutdown":
+            # 由插件 OnFinalize 调用，让服务随 PotPlayer 一起退出
+            log("shutdown requested by plugin")
+            self._send_text(200, "bye")
+            threading.Timer(0.3, lambda: os._exit(0)).start()
         elif path == "/reg":
             self._handle_reg(query)
         elif path.startswith("/p/"):
@@ -220,18 +240,64 @@ class Handler(BaseHTTPRequestHandler):
             self._send_text(404, "not found")
 
 
+def _potplayer_alive():
+    """检测 PotPlayer 进程是否存在；检测失败时返回 True（保守处理，不误杀）
+    一次 tasklist 全量查询后本地匹配，比逐个 /FI 过滤快很多。
+    用 bytes 匹配，避免中文系统下 tasklist 的 GBK 输出触发解码异常。"""
+    try:
+        r = subprocess.run(
+            ["tasklist"],
+            capture_output=True, timeout=8,
+            creationflags=0x08000000,   # CREATE_NO_WINDOW，不闪黑窗
+        )
+        out = (r.stdout or b"").lower()
+        for exe in POTPLAYER_EXES:
+            if exe.lower().encode("ascii") in out:
+                return True
+        return False
+    except Exception:
+        return True
+
+
+def _watchdog():
+    """兜底：PotPlayer 退出（含崩溃）后自动关闭本服务"""
+    miss = 0
+    while not _shutdown_evt.is_set():
+        time.sleep(WATCH_INTERVAL)
+        if time.time() - _started_at < WATCH_STARTUP_GRACE:
+            continue
+        if _potplayer_alive():
+            miss = 0
+            continue
+        miss += 1
+        log("watchdog: PotPlayer not found (%d/%d)" % (miss, WATCH_MISS_LIMIT))
+        if miss >= WATCH_MISS_LIMIT:
+            log("PotPlayer exited -> proxy shutting down")
+            os._exit(0)
+
+
 def main():
+    ap = argparse.ArgumentParser(description="Bilibili CDN proxy for PotPlayer")
+    ap.add_argument("--no-watch", action="store_true",
+                    help="禁用看门狗；服务不会因 PotPlayer 退出而关闭（手动调试用）")
+    args = ap.parse_args()
+
     try:
         srv = ThreadingHTTPServer((BIND, PORT), Handler)
     except OSError as e:
         log("无法监听 %s:%d -> %s" % (BIND, PORT, e))
-        log("可能已有实例在运行，本窗口将退出")
-        time.sleep(3)
+        log("可能已有实例在运行，本进程退出")
         sys.exit(1)
 
     srv.daemon_threads = True
     log("Bilibili CDN proxy listening on http://%s:%d" % (BIND, PORT))
-    log("保持本服务运行，关闭后 PotPlayer 将无法播放 B站 视频")
+
+    if args.no_watch:
+        log("看门狗已禁用，需手动关闭本服务")
+    else:
+        log("看门狗已启用：PotPlayer 退出后本服务自动关闭")
+        threading.Thread(target=_watchdog, daemon=True).start()
+
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

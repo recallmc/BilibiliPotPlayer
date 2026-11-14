@@ -1,0 +1,7 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 本地运行时产物
+*.log

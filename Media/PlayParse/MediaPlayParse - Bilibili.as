@@ -29,16 +29,6 @@ void SetBiliHeaders(const string &in host, const string &in ua) {
 	HostSetUrlRefererHTTP(host, "https://www.bilibili.com");
 }
 
-void OnInitialize() {
-	string ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
-	SetBiliHeaders("bilivideo.com", ua);
-	SetBiliHeaders("bilivideo.cn", ua);
-	SetBiliHeaders("bilibili.com", ua);
-	SetBiliHeaders("akamaized.net", ua);
-	SetBiliHeaders("szbdyd.com", ua);
-	SetBiliHeaders("hdslb.com", ua);
-}
-
 string host = "https://api.bilibili.com";
 string mixin_key;
 
@@ -137,6 +127,7 @@ class Config {
 	bool showRecommendedVideos = true;
 	bool debug = false;
 	bool forceMuxed = true;
+	string proxyAutoStart;
 
 	string danmakuUrl;
 	string subtitleUrl;
@@ -196,6 +187,9 @@ Config ReadConfigFile(string file) {
 		if (root["forceMuxed"].isBool()) {
 			config.forceMuxed = root["forceMuxed"].asBool();
 		}
+		if (root["proxyAutoStart"].isString()) {
+			config.proxyAutoStart = root["proxyAutoStart"].asString();
+		}
 		if (!config.danmakuServer.empty()) {
 			config.danmakuUrl = config.danmakuServer +  "/subtitle?font=" + HostUrlEncode(config.danmakuFont) + "&font_size=" + config.danmakuFontSize + "&alpha=" + config.danmakuOpacity + "&display_area=" + config.danmakuDisplayArea + "&duration_marquee=" + config.danmakuStayTime + "&duration_still=" + config.danmakuStayTime + "&cid=";
 			config.subtitleUrl = config.danmakuServer + "/subtitle?url=";
@@ -248,18 +242,59 @@ void ApplyCdnHeader(const string &in u) {
 }
 
 // 通过本地转发服务取流：绕开 PotPlayer 不发送 Referer 导致 CDN 403 的问题
-// 服务未启动时自动回退到原始地址
+// 服务未启动时回退到原始地址；连续失败若干次后不再尝试，避免每个 URL 都等超时
+int proxyRetry = 5;
+
 string WrapProxy(const string &in u) {
 	if (u.empty()) {
 		return u;
 	}
-	string reg = HostUrlGetString("http://127.0.0.1:18999/reg?u=" + HostUrlEncode(u), "", "", "", true);
-	if (reg.empty()) {
-		log("proxy", "service down -> direct url");
+	if (proxyRetry <= 0) {
 		return u;
 	}
+	string reg = HostUrlGetString("http://127.0.0.1:18999/reg?u=" + HostUrlEncode(u), "", "", "", true);
+	if (reg.empty()) {
+		proxyRetry--;
+		log("proxy", "reg failed, remaining tries: " + proxyRetry);
+		return u;
+	}
+	proxyRetry = 5;
 	log("proxy-id", reg);
 	return "http://127.0.0.1:18999/p/" + reg;
+}
+
+// 服务未运行时，按配置里的 proxyAutoStart 拉起本地转发服务
+// 传入的应是 launch.vbs 路径（隐藏窗口启动，避免黑框闪烁）
+void EnsureProxyStarted() {
+	if (ConfigData.proxyAutoStart.empty()) {
+		return;
+	}
+	string pong = HostUrlGetString("http://127.0.0.1:18999/ping", "", "", "", true);
+	if (!pong.empty()) {
+		log("proxy", "already running");
+		return;
+	}
+	log("proxy", "starting: " + ConfigData.proxyAutoStart);
+	string execOut = HostExecuteProgram("C:\\Windows\\System32\\cmd.exe", "/c \"" + ConfigData.proxyAutoStart + "\"");
+	log("proxy-exec-result", execOut);
+}
+
+void OnInitialize() {
+	string ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+	SetBiliHeaders("bilivideo.com", ua);
+	SetBiliHeaders("bilivideo.cn", ua);
+	SetBiliHeaders("bilibili.com", ua);
+	SetBiliHeaders("akamaized.net", ua);
+	SetBiliHeaders("szbdyd.com", ua);
+	SetBiliHeaders("hdslb.com", ua);
+	EnsureConfig();
+	EnsureProxyStarted();
+}
+
+// PotPlayer 关闭时通知转发服务退出（watchdog 作为崩溃时的兜底）
+void OnFinalize() {
+	HostUrlGetString("http://127.0.0.1:18999/shutdown", "", "", "", true);
+	log("proxy", "shutdown requested");
 }
 
 uint status = 0;

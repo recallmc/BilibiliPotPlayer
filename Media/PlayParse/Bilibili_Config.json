@@ -31,5 +31,12 @@
 	"forceMuxed": true,
 
 	// 开启后播放时会弹出 AngelScript 控制台输出解析日志，排查问题时使用
-	"debug": false
+	"debug": false,
+
+	// 本地转发服务的启动脚本路径（选填，强烈建议填写）
+	// 填写后：PotPlayer 启动时自动拉起转发服务，关闭时自动退出
+	// 留空  ：需要手动双击 proxy\start_proxy.bat 启动服务
+	// 路径中的反斜杠要写两次，例如：
+	//   "C:\\PotPlayer-Bili\\proxy\\launch.bat"
+	"proxyAutoStart": ""
 }
