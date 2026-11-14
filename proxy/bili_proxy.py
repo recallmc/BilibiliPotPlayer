@@ -48,6 +48,22 @@ import urllib.request
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# ---------------------------------------------------------------- 句柄处理
+# pythonw.exe 没有控制台，但仍会继承父进程的标准句柄。
+# PotPlayer 的 HostExecuteProgram 会捕获输出并等待管道 EOF；如果本进程一直
+# 持有那个管道，调用方就会永久阻塞，表现为「播放器启动时卡死（未响应）」。
+# 这里主动把 0/1/2 重定向到 devnull，确保调用方能立刻收到 EOF 并返回。
+if sys.stdout is None and sys.stderr is None:
+    try:
+        _devnull = os.open(os.devnull, os.O_RDWR)
+        os.dup2(_devnull, 0)
+        os.dup2(_devnull, 1)
+        os.dup2(_devnull, 2)
+        if _devnull > 2:
+            os.close(_devnull)
+    except Exception:
+        pass
+
 # ---------------------------------------------------------------- 配置
 PORT = 18999
 BIND = "127.0.0.1"

@@ -159,6 +159,51 @@ def _watchdog():
 > 进程检测用 `tasklist` 全量输出后做 bytes 匹配。中文系统下 `tasklist` 输出 GBK，
 > 若用 `text=True` 会触发 UTF-8 解码异常，因此必须按 bytes 处理。
 
+### 关于 HostExecuteProgram 阻塞（播放器未响应）
+
+`HostExecuteProgram` 会捕获子进程的 stdout 并等待管道 EOF。如果被启动的进程
+继承了这条管道，调用方就永远等不到 EOF，表现为 PotPlayer 界面「未响应」。
+
+踩过的三种错误写法：
+
+| 写法 | 结果 |
+|---|---|
+| `start "" pythonw script.py` | 阻塞。子进程继承 bat 的 stdout 管道 |
+| `start "" pythonw script.py >nul 2>&1` | 仍阻塞。`start` 的子进程依旧继承句柄 |
+| Python 里 `os.dup2(devnull, 1)` | 无效。pythonw 启动到执行 dup2 之前句柄已被持有 |
+
+**正确做法**：让新进程由 Shell 派生，而不是直接继承当前进程。
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0launch.ps1"
+```
+
+```powershell
+Start-Process -FilePath 'D:\python\pythonw.exe' `
+              -ArgumentList 'C:\...ili_proxy.py' `
+              -WindowStyle Hidden
+```
+
+`Start-Process` 走 Shell 派生，新进程**不会继承**调用者的标准句柄，
+因此 `powershell` 执行完立即退出，`HostExecuteProgram` 随之返回。
+
+> 同理，`wscript.exe` 也要给完整路径（`C:\Windows\System32\wscript.exe`）——
+> `HostExecuteProgram` 不走 PATH 查找，裸文件名会静默失败。
+
+### 调试方式
+
+正常使用时**不会弹出控制台**（`debug: false`）。需要排查时按需打开：
+
+1. **插件解析日志** —— 把 `Bilibili_Config.json` 里的 `debug` 改为 `true`，重启 PotPlayer。
+   播放时会弹出 AngelScript 控制台，输出 `request:` / `result:` / `url:` / `proxy-id:` 等。
+2. **错误提示** —— 即便 `debug: false`，解析失败时 PotPlayer 仍会显示
+   `errorMessage`（如 `Bilibili: API request failed`）。
+3. **转发服务** —— 需要脱离播放器单独调试时运行：
+   ```bat
+   python proxy\bili_proxy.py --no-watch
+   ```
+   此时日志直接输出到控制台窗口。
+
 ---
 
 ## 四、安装步骤
@@ -259,7 +304,7 @@ python proxy\bili_proxy.py --no-watch
 | `danmaku.enable` | `false` | 弹幕开关。默认服务器已失效，未换可用服务器前请保持 `false` |
 | `danmaku.server` | `""` | 弹幕服务器地址，需自行部署或寻找可用实例 |
 | `showRecommendedVideos` | `true` | 播放单集时是否在列表中附加推荐视频 |
-| `debug` | `false` | 开启后播放时弹出 AngelScript 控制台，输出解析日志，排查问题用 |
+| `debug` | `false` | **正常使用保持 `false`**（不弹控制台）。设为 `true` 则播放时弹出解析日志，排查问题用 |
 | `proxyAutoStart` | `""` | `launch.bat` 的完整路径。填写后服务随 PotPlayer 启停；留空则需手动启动服务 |
 
 ### 画质与声音的取舍

@@ -1,14 +1,11 @@
 @echo off
-rem ============================================================
-rem  Called by the PotPlayer plugin from OnInitialize via "cmd /c"
-rem  Launches the local CDN proxy in background (no console window)
+rem Called by the PotPlayer plugin from OnInitialize via cmd /c
 rem
-rem  If pythonw.exe is not in your PATH, replace the line below with
-rem  the full path, for example:
-rem      set PYTHONW=D:\python\pythonw.exe
-rem ============================================================
-
-set PYTHONW=pythonw
-set PROXYSCRIPT=%~dp0bili_proxy.py
-
-start "" %PYTHONW% "%PROXYSCRIPT%"
+rem Do NOT start pythonw directly here. If the child process inherits this
+rem script's stdout pipe, HostExecuteProgram waits for that pipe to reach EOF
+rem and the player freezes ("Not Responding").
+rem
+rem Start-Process derives the process through the shell, which detaches it
+rem from the inherited pipe, so the caller returns immediately.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0launch.ps1"
+exit /b 0
