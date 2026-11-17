@@ -306,6 +306,7 @@ python proxy\bili_proxy.py --no-watch
 | `showRecommendedVideos` | `true` | 播放单集时是否在列表中附加推荐视频 |
 | `debug` | `false` | **正常使用保持 `false`**（不弹控制台）。设为 `true` 则播放时弹出解析日志，排查问题用 |
 | `proxyAutoStart` | `""` | `launch.bat` 的完整路径。填写后服务随 PotPlayer 启停；留空则需手动启动服务 |
+| `cookieFile` | `""` | `bili_auth.json` 的路径。填写后优先读取自动续期的最新 Cookie |
 
 ### 画质与声音的取舍
 
@@ -360,6 +361,63 @@ proxy-id: 1                                                 ← 已注册到转�
    实测 7 分钟左右的视频为单段，超长视频（如电影）可能受影响
 4. **依赖转发服务** —— 服务未运行时无法播放（会自动回退到直连，但直连会 403）
 5. **Cookie 会过期** —— SESSDATA 有效期约半年，过期后需重新获取
+
+---
+
+## 附录 A：Cookie 自动续期
+
+Cookie（SESSDATA）有效期约 30 天，过期后画质会掉到 **360P**。
+本方案通过 `refresh_token` 自动续期，**长期免维护**。
+
+### 一次性扫码登录
+
+```bat
+cd proxy
+python bili_login.py qr      :: 生成二维码
+python bili_login.py poll    :: 确认登录，保存凭证
+```
+
+用手机 B站 APP 扫码确认。成功后得到：
+
+| 产物 | 位置 | 作用 |
+|---|---|---|
+| Cookie | `bili_auth.json` | 插件优先读取 |
+| `refresh_token` | `bili_auth.json` | 自动续期的钥匙 |
+
+### 自动续期机制
+
+```
+bili_proxy.py 启动（跟随 PotPlayer）
+   └─> bili_cookie_refresh.maybe_refresh()
+         ├─ 距上次刷新 < 7 天 → 跳过
+         └─ 超过 7 天 → 调 B站 刷新接口换新
+               ├─ 成功 → 更新 bili_auth.json
+               └─ 失败 → 记录，下次重试
+```
+
+**关键设计**：刷新结果写到**用户目录**（`bili_auth.json`），
+插件通过 `cookieFile` 配置项优先读取它 —— **全程不需要提权**。
+
+```json
+"cookieFile": "C:\\Users\\\\<you>\\\\bili-proxy\\\\bili_auth.json"
+```
+
+### 为什么画质掉到 360P
+
+```
+fnval=1  (durl 音视频合一) → 未登录时 B站 只给 360P
+fnval=4048 (DASH 分离流)   → 未登录也能给 720P
+```
+
+`forceMuxed=true` 走 durl 合流（保证有声音），但 SESSDATA 一失效就被卡在 360P。
+登录恢复后即回到 1080P。
+
+### 注意事项
+
+1. `refresh_token` 本身有效期约 **一年**，到期需重新扫码
+2. 刷新失败通常意味着已过期，需重新执行 `bili_login.py qr`
+3. 刷新间隔设为 7 天（SESSDATA 有效 30 天，留足余量）
+4. 状态记录在 `bili_refresh_state.json`，可删除强制立即刷新
 
 ---
 

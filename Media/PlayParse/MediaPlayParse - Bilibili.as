@@ -128,6 +128,7 @@ class Config {
 	bool debug = false;
 	bool forceMuxed = true;
 	string proxyAutoStart;
+	string cookieFile;
 
 	string danmakuUrl;
 	string subtitleUrl;
@@ -190,6 +191,9 @@ Config ReadConfigFile(string file) {
 		if (root["proxyAutoStart"].isString()) {
 			config.proxyAutoStart = root["proxyAutoStart"].asString();
 		}
+		if (root["cookieFile"].isString()) {
+			config.cookieFile = root["cookieFile"].asString();
+		}
 		if (!config.danmakuServer.empty()) {
 			config.danmakuUrl = config.danmakuServer +  "/subtitle?font=" + HostUrlEncode(config.danmakuFont) + "&font_size=" + config.danmakuFontSize + "&alpha=" + config.danmakuOpacity + "&display_area=" + config.danmakuDisplayArea + "&duration_marquee=" + config.danmakuStayTime + "&duration_still=" + config.danmakuStayTime + "&cid=";
 			config.subtitleUrl = config.danmakuServer + "/subtitle?url=";
@@ -212,6 +216,21 @@ void EnsureConfig() {
 		}
 	} else {
 		log("config", "FILE NOT FOUND");
+	}
+
+	// 优先读取自动续期后的最新 Cookie（bili_auth.json）
+	// 转发服务会定期刷新 Cookie 并写入该文件，过期后无需手动更新
+	if (!ConfigData.cookieFile.empty() && isFileExists(ConfigData.cookieFile)) {
+		string authRaw = HostFileRead(HostFileOpen(ConfigData.cookieFile), 20000);
+		JsonReader authReader;
+		JsonValue authRoot;
+		if (authReader.parse(authRaw, authRoot) && authRoot.isObject() && authRoot["cookie"].isString()) {
+			string freshCookie = authRoot["cookie"].asString();
+			if (!freshCookie.empty()) {
+				ConfigData.cookie = freshCookie;
+				log("cookie", "loaded from auth file");
+			}
+		}
 	}
 }
 

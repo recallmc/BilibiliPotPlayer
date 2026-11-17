@@ -1,16 +1,11 @@
 {
-	// 填写账号 Cookie（必填，否则只能拿到低画质）
-	// 获取方法见 https://github.com/chen310/BilibiliPotPlayer/issues/62
-	"cookie": "",
-
+	// 填写账号 Cookie
+	"cookie": "SESSDATA=3b855bef%2C1810433526%2Cd117c%2Ab1CjBCvw8TC8di1YqW_lU1EPZtjYwBqstj_pvQL890uHyJlJcedKwtV-kXUSMKqHsLPAASVktDbXRjN3c1NnA4UXlxblkyZGxDRWZPa0FLVXc0TmZnSHdRZ1VaaDFmQTluUTlhNFA5UnFSWTBoN1lRVTJxYTNBZUNCUmZQQmxzT2ZuWGNPUEplT0xnIIEC; bili_jct=34268d4b77810991449feb0295a3d221; DedeUserID=1925771374; DedeUserID__ckMd5=26aee7ee3853bb03; sid=g88az51s; default_sites=%5B%22CN%22%2C%22OVERSEAS%22%5D",
 	"maxliveroom": 200,
-
 	"danmaku": {
 		// 控制是否接收弹幕。按 Alt+H 可显示/隐藏弹幕
-		// 注意：默认弹幕服务器 subtitle.chen310.repl.co 的域名已失效（DNS 无法解析），
-		//       未更换为可用服务器前请保持 enable = false，否则字幕加载失败会拖累播放
 		"enable": false,
-		"server": "",
+		"server": "https://subtitle.chen310.repl.co",
 		// 字体
 		"font": "微软雅黑",
 		// 字号
@@ -22,21 +17,17 @@
 		// 弹幕显示时间
 		"stayTime": 15.0
 	},
-
 	// 播放单个视频时是否显示推荐的视频
 	"showRecommendedVideos": true,
-
-	// true  = 请求音视频合一的 mp4（fnval=1）。声音必定正常，画质上限 1080P
-	// false = 请求 DASH 分离流（fnval=4048）。画质更高，但 PotPlayer 26.x 下音轨可能配对失败导致无声
+	// true = 请求音视频合一的 mp4（保证有声音，1080P 封顶）
+	// false = 请求 DASH 分离流（画质更高，但部分播放器可能没声音）
 	"forceMuxed": true,
-
-	// 开启后播放时会弹出 AngelScript 控制台输出解析日志，排查问题时使用
 	"debug": false,
+	// 留空则不自动启动。填写 launch.bat 的完整路径后，
+	// 转发服务会随 PotPlayer 启动而拉起、随其关闭而退出
+	"proxyAutoStart": "C:\\Users\\Recall\\bili-proxy\\launch.bat",
+	// 自动续期后的最新 Cookie 会写到这个文件，插件优先读取它
+	// 留空则只用下面的 cookie 字段
+	"cookieFile": "C:\\Users\\Recall\\bili-proxy\\bili_auth.json"
 
-	// 本地转发服务的启动脚本路径（选填，强烈建议填写）
-	// 填写后：PotPlayer 启动时自动拉起转发服务，关闭时自动退出
-	// 留空  ：需要手动双击 proxy\start_proxy.bat 启动服务
-	// 路径中的反斜杠要写两次，例如：
-	//   "C:\\PotPlayer-Bili\\proxy\\launch.bat"
-	"proxyAutoStart": ""
 }

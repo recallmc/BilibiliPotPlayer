@@ -308,6 +308,15 @@ def main():
     srv.daemon_threads = True
     log("Bilibili CDN proxy listening on http://%s:%d" % (BIND, PORT))
 
+    # Cookie 自动续期：距上次刷新超过 7 天则自动换新
+    # 失败不影响服务运行（只是画质可能降级到 360P）
+    try:
+        import bili_cookie_refresh
+        threading.Thread(target=bili_cookie_refresh.maybe_refresh, daemon=True).start()
+        log("cookie auto-refresh armed")
+    except Exception as e:
+        log("cookie auto-refresh unavailable: %s" % e)
+
     if args.no_watch:
         log("看门狗已禁用，需手动关闭本服务")
     else:
