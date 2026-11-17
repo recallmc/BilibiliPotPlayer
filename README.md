@@ -22,15 +22,21 @@
 | 画质被误选成 360P | 同上，只提供当前最高画质 |
 | 弹幕加载拖累播放 | 原弹幕服务器 `subtitle.chen310.repl.co` 域名已失效，默认关闭 |
 | 转发服务需手动开关 | 绑定到播放器生命周期：启动时拉起、关闭时退出，崩溃后由看门狗兜底 |
+| Cookie 过期后画质掉到 360P | 扫码登录一次 + `refresh_token` 自动续期，长期免维护 |
 
 **快速开始**
 
 ```text
 1. 复制插件文件到 PotPlayer 的 Extension\Media\ 对应目录（见下方「安装插件」）
-2. 编辑 Bilibili_Config.json，填好两项：
-     cookie          = 你自己的 B站 Cookie
+2. 扫码登录获取 Cookie（推荐，一劳永逸）：
+     cd proxy
+     python bili_login.py qr      # 生成二维码，手机 B站 APP 扫码
+     python bili_login.py poll    # 确认登录，自动保存凭证
+   也可手动把 Cookie 填进 Bilibili_Config.json，但过期后需要自己更新
+3. 编辑 Bilibili_Config.json，填好两项：
      proxyAutoStart  = proxy\launch.bat 的完整路径（注意反斜杠写两次）
-3. 重启 PotPlayer，把 B站链接拖进去
+     cookieFile      = bili_auth.json 的完整路径（启用自动续期）
+4. 重启 PotPlayer，把 B站链接拖进去
 ```
 
 转发服务会**随 PotPlayer 自动启停**，无需手动管理，也不需要设置开机自启：
@@ -42,6 +48,10 @@
 | 播放器崩溃 | 服务看门狗约 25 秒后自行退出 |
 
 > 验证服务是否就绪：浏览器打开 <http://127.0.0.1:18999/ping>，返回 `pong` 即可。
+
+**Cookie 自动续期**：服务启动后每 7 天自动刷新一次 Cookie（`refresh_token` 换新），
+结果写入用户目录的 `bili_auth.json`，插件优先读取它。**长期使用无需手动更新 Cookie**。
+详细说明见 [docs/FIX-PotPlayer-26.md](docs/FIX-PotPlayer-26.md) 的「附录 A」。
 
 **完整文档**
 
